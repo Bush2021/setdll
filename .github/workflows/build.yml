@@ -62,7 +62,7 @@ jobs:
     
     - name: Prepare Release Files
       run: |
-        cp src/injectpe.bat dist/
+        cp injectpe.bat dist/
         cp README.md dist/
 
     - name: Upload Archive Artifact
