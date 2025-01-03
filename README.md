@@ -1,35 +1,43 @@
-## System requirements
+## Set DLL for [chrome_plus](https://github.com/Bush2021/chrome_plus)
+* Extract all files from this [archive](https://github.com/Bush2021/chrome_plus/releases/download/latest/setdll.7z) to the directory where the browser executable to be injected is located, and run `injectpe.bat`. Once the command line runs successfully, it will automatically delete the extra files.
 
-C compiler 
+* `injectpe.bat` is configured for Microsoft Edge. If you want to use it on other browsers, please modify the `msedge.exe` field in `injectpe.bat` to the executable of the desired browser.
 
-Microsoft Visual Studio 2013 or above .
+* Original project: https://github.com/adonais/setdll/
 
-## build
+## Original Project Description
+### System Requirements
 
-nmake clean    
-nmake 
+* C compiler
+* Microsoft Visual Studio 2013 or above
+
+### Build
+
+```sh
+nmake clean
+nmake
+```
 
 or
 
-nmake CC=clang-cl clean  
-nmake CC=clang-cl 
+```sh
+nmake CC=clang-cl clean
+nmake CC=clang-cl
+```
 
-## About setdll
+### About setdll
 
-Usage:
-    setdll [options] binary_files
-    
-Options:
+**Usage:**
+```
+setdll [options] binary_files
+```
 
-    /d:file.dll         :        Add file.dll binary files
-    
-    /r                  :        Remove extra DLLs from binary files
-    
-    /p:browser\omni.ja  :        Repair omni.ja to support Upcheck.exe
+**Options:**
 
-    /t:file.exe         :        Test PE file bits
-        
-    /?                  :        This help screen
-    
-    -7 --help           :        7z command help screen
-    
+* `/d:file.dll` : Add `file.dll` to binary files
+* `/r` : Remove extra DLLs from binary files
+* `/p:browser\omni.ja` : Repair `omni.ja` to support `Upcheck.exe`
+* `/t:file.exe` : Test PE file bits
+* `/?` : Display this help screen
+* `-7 --help` : Display 7z command help screen
+
