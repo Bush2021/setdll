@@ -36,6 +36,9 @@ jobs:
       
     - name: Setup VC-LTL
       run: nuget install VC-LTL
+      
+    - name: Setup YY-Thunks
+      run: nuget install YY-Thunks
 
     - name: Setup Xmake
       uses: xmake-io/github-action-setup-xmake@v1
