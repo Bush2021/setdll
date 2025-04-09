@@ -23,31 +23,37 @@ jobs:
             arch: x86
           - name: build_x64
             arch: x64
+          - name: build_arm64
+            arch: arm64
     name: ${{ matrix.name }}
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Repo
+      uses: actions/checkout@v4
       with:
-        fetch-depth: 1
+        submodules: 'true'
       
-    - name: Set up Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: ${{ matrix.arch }}
+    - name: Setup VC-LTL
+      run: nuget install VC-LTL
+
+    - name: Setup Xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      
+    - name: Configure Xmake
+      run: xmake f -a ${{ matrix.arch }}
       
     - name: Build
-      run: |
-        nmake clean
-        nmake
+      run: xmake
         
-    - name: Upload seperate artifacts
+    - name: Upload Separate Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: setdll-${{ matrix.arch }}
-        path: Release/*.exe
+        path: build/release/*
 
   package:
+    if: github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     
@@ -72,7 +78,6 @@ jobs:
         path: dist
     
     - name: Create 7z Archive
-      if: github.event_name == 'workflow_dispatch'
       run: |
         VERSION="${{ github.event.inputs.version }}"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -80,7 +85,6 @@ jobs:
         7z a -mx=9 -ms=on -m0=lzma2 -mmt=on setdll-${{ github.event.inputs.version }}.7z *
         
     - name: Create Release
-      if: github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
         files: dist/setdll-${{ env.VERSION }}.7z

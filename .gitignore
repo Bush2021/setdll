@@ -43,6 +43,10 @@
 *.pdb
 
 # Kernel Module Compile Results
+.xmake/
+build/
+.vscode/
+.idea/
 *.mod*
 *.cmd
 .tmp_versions/
