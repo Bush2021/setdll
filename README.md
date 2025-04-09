@@ -3,6 +3,9 @@
 
 * `injectpe.bat` is configured for Microsoft Edge. If you want to use it on other browsers, please modify the `msedge.exe` field in `injectpe.bat` to the executable of the desired browser.
 
+## License
+Original project is licensed under MIT license. It is re-licensed under GPL-3.0 license.
+
 * Original project: https://github.com/adonais/setdll/
 
 ## Original Project Description
