@@ -63,35 +63,37 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Download all artifacts
+    - name: Download All Artifacts
       uses: actions/download-artifact@v4
       with:
-        path: dist
-        merge-multiple: true
+        path: build_artifacts
     
     - name: Prepare Release Files
       run: |
-        cp injectpe.bat dist/
-        cp README.md dist/
+        for arch in x86 x64 arm64; do
+          cp injectpe.bat build_artifacts/setdll-$arch
+          cp README.md build_artifacts/setdll-$arch
+        done
 
-    - name: Upload Archive Artifact
+    - name: Create Archives
+      run: |
+        for arch in x86 x64 arm64; do
+          cd build_artifacts/setdll-$arch
+          zip -r ../setdll-$arch.zip .
+          cd ../..
+        done
+
+    - name: Upload Archive Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: setdll-release
-        path: dist
+        path: build_artifacts/*.zip
     
-    - name: Create 7z Archive
-      run: |
-        VERSION="${{ github.event.inputs.version }}"
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        cd dist
-        7z a -mx=9 -ms=on -m0=lzma2 -mmt=on setdll-${{ github.event.inputs.version }}.7z *
-        
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        files: dist/setdll-${{ env.VERSION }}.7z
-        tag_name: ${{ env.VERSION }}
-        name: ${{ env.VERSION }}
+        files: build_artifacts/**/*
+        tag_name: ${{ github.event.inputs.version }}
+        name: ${{ github.event.inputs.version }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
