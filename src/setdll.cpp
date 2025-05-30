@@ -16,6 +16,7 @@
 #pragma warning(disable:6102 6103) // /analyze warnings
 #endif
 #include <strsafe.h>
+#define is_valid_handle(x) (x != NULL && x != INVALID_HANDLE_VALUE)
 #pragma warning(pop)
 
 ////////////////////////////////////////////////////////////// Error Messages.
@@ -33,7 +34,9 @@ do { if (!(x)) { AssertMessage(#x, __FILE__, __LINE__); DebugBreak(); }} while (
 //////////////////////////////////////////////////////////////////////////////
 //
 static BOOLEAN  s_fRemove = FALSE;
+static BOOLEAN  s_fShowPEInfo = FALSE;
 static CHAR     s_szDllPath[MAX_PATH] = "";
+static WCHAR    w_szDllPath[MAX_PATH] = L"";
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -242,14 +245,75 @@ BOOL SetFile(PCHAR pszPath)
 
 //////////////////////////////////////////////////////////////////////////////
 //
+int __stdcall
+get_file_bits(const wchar_t* path)
+{
+    IMAGE_DOS_HEADER dos_header;
+    IMAGE_NT_HEADERS pe_header;
+    int  	ret = 1;
+    HANDLE	hFile = CreateFileW(path, GENERIC_READ,
+                                FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, NULL);
+    if (!is_valid_handle(hFile))
+    {
+        return ret;
+    }
+    do
+    {
+        DWORD readed = 0;
+        DWORD m_ptr = SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+        if (INVALID_SET_FILE_POINTER == m_ptr)
+        {
+            break;
+        }
+        ret = ReadFile(hFile, &dos_header, sizeof(IMAGE_DOS_HEADER), &readed, NULL);
+        if (!ret || readed != sizeof(IMAGE_DOS_HEADER) || 
+            dos_header.e_magic != IMAGE_DOS_SIGNATURE)
+        {
+            break;
+        }
+        m_ptr = SetFilePointer(hFile, dos_header.e_lfanew, NULL, FILE_BEGIN);
+        if (INVALID_SET_FILE_POINTER == m_ptr)
+        {
+            break;
+        }
+        ret = ReadFile(hFile, &pe_header, sizeof(IMAGE_NT_HEADERS), &readed, NULL);
+        if (!ret || readed != sizeof(IMAGE_NT_HEADERS))
+        {
+            break;
+        }
+        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_I386)
+        {
+            ret = 332;
+            break;
+        }
+        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_IA64 ||
+            pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+        {
+            ret = 34404;
+            break;
+        }
+        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64)
+        {
+            ret = 43620;
+            break;
+        }
+    } while (0);
+    CloseHandle(hFile);
+    return ret;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 void PrintUsage(void)
 {
     printf("Usage:\n"
            "    setdll [options] binary_files\n"
            "Options:\n"
-           "    /d:file.dll  : Add file.dll binary files\n"
-           "    /r           : Remove extra DLLs from binary files\n"
-           "    /?           : This help screen.\n");
+           "    /d:file.dll  : Inject specified DLL into target binaries\n"
+           "    /r           : Remove extra DLLs from binaries\n"
+           "    /t:file.exe  : Show PE file architecture information\n"
+           "    /?           : Display help information\n");
 }
 
 //////////////////////////////////////////////////////////////////////// main.
@@ -286,6 +350,49 @@ int CDECL main(int argc, char **argv)
                 s_fRemove = TRUE;
                 break;
 
+                case 't': // get PE file bits
+                case 'T':
+                    s_fShowPEInfo = TRUE;
+                    if (strlen(argp) < 1)
+                    {
+                        fNeedHelp = TRUE;
+                        break;
+                    }
+                    MultiByteToWideChar(CP_ACP, 0, argp, -1, w_szDllPath, MAX_PATH);
+
+                    if (argp[0] != ':' && strchr(argp, '\\') != NULL) 
+                    {
+                        WCHAR fullPath[MAX_PATH];
+                        if (GetFullPathNameW(w_szDllPath, MAX_PATH, fullPath, NULL)) {
+                            wcscpy_s(w_szDllPath, MAX_PATH, fullPath);
+                        }
+                    }
+
+                    WideCharToMultiByte(CP_ACP, 0, w_szDllPath, -1, s_szDllPath, sizeof(s_szDllPath), NULL, NULL);
+                    
+                    if (s_szDllPath[0] != '\0')
+                    {
+                        int bits = get_file_bits(w_szDllPath);
+                        if (bits == 332)
+                        {
+                            printf("PE32 executable (i386), for MS Windows\n");
+                        }
+                        else if (bits == 34404)
+                        {
+                            printf("PE32+ executable (x86-64), for MS Windows\n");
+                        }
+                        else if (bits == 43620)
+                        {
+                            printf("PE32+ executable (ARM64), for MS Windows\n");
+                        }
+                        else
+                        {
+                            printf("Unknown PE format or not a valid PE file\n");
+                        }
+                        return bits;
+                    }
+                    break;
+
               case '?':                                 // Help
                 fNeedHelp = TRUE;
                 break;
@@ -300,7 +407,7 @@ int CDECL main(int argc, char **argv)
     if (argc == 1) {
         fNeedHelp = TRUE;
     }
-    if (!s_fRemove && s_szDllPath[0] == 0) {
+    if (!s_fRemove && s_szDllPath[0] == 0 && !s_fShowPEInfo) {
         fNeedHelp = TRUE;
     }
     if (fNeedHelp) {
@@ -308,6 +415,9 @@ int CDECL main(int argc, char **argv)
         return 1;
     }
 
+    if (s_fShowPEInfo) {
+        return 0;
+    }
 
     if (s_fRemove) {
         printf("Removing extra DLLs from binary files.\n");
