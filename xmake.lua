@@ -1,4 +1,4 @@
-includes("VC-LTL5.lua", "YY-Thunks.lua")
+-- includes("VC-LTL5.lua", "YY-Thunks.lua")
 
 add_rules("mode.debug", "mode.release")
 
