@@ -4,10 +4,8 @@ on:
     paths-ignore:
       - '*.md'
       - '.gitignore'
-  pull_request:
-    paths-ignore:
-      - '*.md'
-      - '.gitignore'
+      - "src/version.h"
+      - ".github/workflows/delete_old_workflow_runs.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -33,7 +31,24 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: 'true'
-      
+
+    - name: Update version.h
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" == "push" ]; then
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          VERSION="alpha-${COMMIT_HASH}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          sed -i '/#define RELEASE_VER_STR/,/TOSTRING(RELEASE_VER_FIX)/c\#define RELEASE_VER_STR "'$VERSION'"' src/version.h
+        elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '$MAJOR'/' src/version.h
+          sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '$MINOR'/' src/version.h 
+          sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '$PATCH'/' src/version.h
+        fi
+
     - name: Setup VC-LTL
       run: nuget install VC-LTL
       
@@ -55,45 +70,39 @@ jobs:
         name: setdll-${{ matrix.arch }}
         path: build/release/*
 
-  package:
-    if: github.event_name == 'workflow_dispatch'
+  create_pr:
     needs: build
     runs-on: ubuntu-latest
-    
+    if: github.event_name == 'workflow_dispatch'
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download All Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: build_artifacts
-    
-    - name: Prepare Release Files
-      run: |
-        for arch in x86 x64 arm64; do
-          cp injectpe.bat build_artifacts/setdll-$arch
-          cp README.md build_artifacts/setdll-$arch
-        done
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Create Archives
-      run: |
-        for arch in x86 x64 arm64; do
-          cd build_artifacts/setdll-$arch
-          zip -r ../setdll-$arch.zip .
-          cd ../..
-        done
+      - name: Set up Git Configurations
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b release
 
-    - name: Upload Archive Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: setdll-release
-        path: build_artifacts/*.zip
-    
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: build_artifacts/**/*
-        tag_name: ${{ github.event.inputs.version }}
-        name: ${{ github.event.inputs.version }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update version.h
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '"$MAJOR"'/' src/version.h
+          sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '"$MINOR"'/' src/version.h
+          sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '"$PATCH"'/' src/version.h
+          git add src/version.h
+          git commit -m "build(release): bump version to $VERSION"
+          git push origin release --force
+
+      - name: Create Pull Request
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          git push origin release
+          gh pr create --base main --head release --title "build(release): bump version to ${{ github.event.inputs.version }}" --body "Bump version to ${{ github.event.inputs.version }}"
+
+      - name: Output Run ID
+        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_OUTPUT
