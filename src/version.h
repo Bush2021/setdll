@@ -1,7 +1,7 @@
 #ifndef VERSION_H_
 #define VERSION_H_
 
-#define RELEASE_VER_MAIN 1
+#define RELEASE_VER_MAIN 2
 #define RELEASE_VER_SUB 0
 #define RELEASE_VER_FIX 0
 
