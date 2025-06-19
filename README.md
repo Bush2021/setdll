@@ -16,7 +16,7 @@ Options:
 
 ### Injection Script
 
-* Extract all files from this [archive](https://github.com/Bush2021/chrome_plus/releases/download/latest/setdll.7z) to the directory where the browser executable to be injected is located, and run `injectpe.bat`. Once the command line runs successfully, it will automatically delete the extra files.
+* Extract all files from [setdll.7z](https://github.com/Bush2021/chrome_plus/releases/latest) to the directory where the browser executable to be injected is located, and run `injectpe.bat`. Once the command line runs successfully, it will automatically delete the extra files.
 
 * `injectpe.bat` provides a convenient wrapper for injection operations. The default target is Microsoft Edge browser. If you want to use it on other browsers, please input the name of the executable file you wish to inject.
 
