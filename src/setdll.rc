@@ -1,6 +1,8 @@
 #include <windows.h>
 #include "version.h"
 
+1 RT_MANIFEST "setdll.manifest"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION RELEASE_VER_MAIN,RELEASE_VER_SUB,RELEASE_VER_FIX,0
  PRODUCTVERSION RELEASE_VER_MAIN,RELEASE_VER_SUB,RELEASE_VER_FIX,0
@@ -27,4 +29,30 @@ BEGIN
     BEGIN
         VALUE "Translation", 0x804, 1200
     END
+END
+
+#include "setdll_resources.h"
+
+IDD_INJECT_DIALOG DIALOGEX 0, 0, 320, 180
+STYLE DS_SETFONT | DS_CENTER | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_ACCEPTFILES
+CAPTION "setdll - Inject DLL"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Drop a Windows executable here, or browse:", IDC_PROMPT, 14, 14, 290, 12
+    PUSHBUTTON      "Browse...", IDC_BROWSE, 14, 28, 60, 14
+
+    GROUPBOX        "Target", IDC_TARGET_GROUP, 14, 56, 290, 90
+    LTEXT           "File:",         IDC_LABEL_FILE,   22,  70, 28, 10
+    LTEXT           "",              IDC_TEXT_FILE,    54,  70, 242, 10
+    LTEXT           "Arch:",         IDC_LABEL_ARCH,   22,  84, 28, 10
+    LTEXT           "",              IDC_TEXT_ARCH,    54,  84, 242, 10
+    LTEXT           "DLL:",          IDC_LABEL_DLL,    22,  98, 28, 10
+    LTEXT           "",              IDC_TEXT_DLL,     54,  98, 190, 10
+    PUSHBUTTON      "Change...",     IDC_BROWSE_DLL,  248,  95,  52, 14
+    LTEXT           "Status:",       IDC_LABEL_STATUS, 22, 112, 28, 10
+    LTEXT           "",              IDC_TEXT_STATUS,  54, 112, 242, 18
+
+    DEFPUSHBUTTON   "Inject", IDC_PRIMARY, 200, 156, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 256, 156, 50, 14
 END

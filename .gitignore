@@ -54,3 +54,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Local agent / planning artifacts
+*.html
+.claude/
+docs/
+AGENTS.md
+CLAUDE.md

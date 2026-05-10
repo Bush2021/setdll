@@ -64,7 +64,6 @@ jobs:
             mv build_artifacts/setdll-$arch/setdll.exe build_artifacts/setdll-$arch.exe
             rm -rf build_artifacts/setdll-$arch
           done
-          cp injectpe.bat build_artifacts/
           cp README.md build_artifacts/
 
       - name: Create Archive

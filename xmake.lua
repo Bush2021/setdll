@@ -3,6 +3,7 @@ includes("VC-LTL5.lua", "YY-Thunks.lua")
 add_rules("mode.debug", "mode.release")
 
 set_warnings("more")
+set_languages("c++17")
 add_defines("WIN32", "_WIN32")
 add_defines("UNICODE", "_UNICODE", "_CRT_SECURE_NO_WARNINGS", "_CRT_NONSTDC_NO_DEPRECATE")
 
@@ -13,7 +14,7 @@ if is_mode("release") then
 end
 
 add_cxflags("/utf-8")
-add_links("kernel32", "user32")
+add_links("kernel32", "user32", "comctl32", "shell32", "comdlg32", "shlwapi")
 
 target("detours")
     set_kind("static")
@@ -27,3 +28,4 @@ target("setdll")
     add_links("detours")
     add_files("src/*.cpp")
     add_files("src/*.rc")
+    add_ldflags("/SUBSYSTEM:WINDOWS", "/ENTRY:wWinMainCRTStartup", {force = true})

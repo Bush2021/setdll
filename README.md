@@ -2,24 +2,35 @@
 
 A utility tool for DLL injection into Windows executables, based on Microsoft Detours.
 
-### Usage
+### Quick start (GUI)
+
+1. Extract all files from [setdll.7z](https://github.com/Bush2021/chrome_plus/releases/latest) to the directory where the browser executable is located.
+2. Drag the browser executable (e.g., `msedge.exe`) onto `setdll.exe`, or double-click `setdll.exe` and pick the target with **Browse...**.
+3. The dialog auto-detects the target's architecture, looks for `version-<arch>.dll` next to the target, and offers **Inject** or **Restore**. Click — done.
+
+The auto-detected DLL name (`version-<arch>.dll`) is the chrome_plus default. If you want to inject a different DLL, click **Change...** on the DLL row to pick any `.dll` instead. For scripted or batch use, see the command line below.
+
+### Command line
 
 ```
 setdll [options] binary_files
 ```
 
 Options:
-* `/d:file.dll` : Inject specified DLL into target binaries
-* `/r` : Remove extra DLLs from binaries
-* `/t:file.exe` : Show PE file architecture information
-* `/?` : Display help information
+* `/d:file.dll` — inject the specified DLL (basename or full path both work)
+* `/r` — remove all injected DLLs from the target
+* `/t:file.exe` — print PE architecture information; exits 0 on success, 1 if the file is not a recognized PE
+* `/?` — help
 
-### Injection Script
+Examples:
 
-* Extract all files from [setdll.7z](https://github.com/Bush2021/chrome_plus/releases/latest) to the directory where the browser executable to be injected is located, and run `injectpe.bat`. Once the command line runs successfully, it will automatically delete the extra files.
+```
+setdll /d:mymod-x64.dll target.exe
+setdll /r target.exe
+setdll /t:target.exe
+```
 
-* `injectpe.bat` provides a convenient wrapper for injection operations. The default target is Microsoft Edge browser. If you want to use it on other browsers, please input the name of the executable file you wish to inject.
-
+`setdll.exe` is a Windows-subsystem binary; CLI output attaches to the parent console (`cmd.exe`, PowerShell, etc.). Existing scripts that invoke the CLI continue to work unchanged.
 
 ### License
 
