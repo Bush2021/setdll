@@ -18,6 +18,14 @@
 #include <strsafe.h>
 #define is_valid_handle(x) (x != NULL && x != INVALID_HANDLE_VALUE)
 #pragma warning(pop)
+#include <commctrl.h>
+#include <commdlg.h>
+#include <shlwapi.h>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+#include "setdll_resources.h"
 
 ////////////////////////////////////////////////////////////// Error Messages.
 //
@@ -245,62 +253,133 @@ BOOL SetFile(PCHAR pszPath)
 
 //////////////////////////////////////////////////////////////////////////////
 //
-int __stdcall
-get_file_bits(const wchar_t* path)
+WORD __stdcall
+get_pe_machine(const wchar_t* path)
 {
-    IMAGE_DOS_HEADER dos_header;
-    IMAGE_NT_HEADERS pe_header;
-    int  	ret = 1;
-    HANDLE	hFile = CreateFileW(path, GENERIC_READ,
-                                FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                                FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileW(path, GENERIC_READ,
+                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (!is_valid_handle(hFile))
     {
-        return ret;
+        return IMAGE_FILE_MACHINE_UNKNOWN;
     }
+
+    IMAGE_DOS_HEADER dos_header;
+    IMAGE_NT_HEADERS pe_header;
+    WORD machine = IMAGE_FILE_MACHINE_UNKNOWN;
     do
     {
         DWORD readed = 0;
-        DWORD m_ptr = SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
-        if (INVALID_SET_FILE_POINTER == m_ptr)
+        if (SetFilePointer(hFile, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
         {
             break;
         }
-        ret = ReadFile(hFile, &dos_header, sizeof(IMAGE_DOS_HEADER), &readed, NULL);
-        if (!ret || readed != sizeof(IMAGE_DOS_HEADER) || 
+        if (!ReadFile(hFile, &dos_header, sizeof(dos_header), &readed, NULL) ||
+            readed != sizeof(dos_header) ||
             dos_header.e_magic != IMAGE_DOS_SIGNATURE)
         {
             break;
         }
-        m_ptr = SetFilePointer(hFile, dos_header.e_lfanew, NULL, FILE_BEGIN);
-        if (INVALID_SET_FILE_POINTER == m_ptr)
+        if (SetFilePointer(hFile, dos_header.e_lfanew, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
         {
             break;
         }
-        ret = ReadFile(hFile, &pe_header, sizeof(IMAGE_NT_HEADERS), &readed, NULL);
-        if (!ret || readed != sizeof(IMAGE_NT_HEADERS))
+        if (!ReadFile(hFile, &pe_header, sizeof(pe_header), &readed, NULL) ||
+            readed != sizeof(pe_header))
         {
             break;
         }
-        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_I386)
-        {
-            ret = 332;
-            break;
-        }
-        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_IA64 ||
-            pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
-        {
-            ret = 34404;
-            break;
-        }
-        if (pe_header.FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64)
-        {
-            ret = 43620;
-            break;
-        }
+        machine = pe_header.FileHeader.Machine;
     } while (0);
     CloseHandle(hFile);
-    return ret;
+    return machine;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+//  GUI helpers — architecture detection, DLL discovery, patched-state check.
+//
+
+enum class TargetArch { Unknown, X86, X64, ARM64 };
+
+static TargetArch DetectTargetArch(const wchar_t* path)
+{
+    switch (get_pe_machine(path)) {
+        case IMAGE_FILE_MACHINE_I386:  return TargetArch::X86;
+        case IMAGE_FILE_MACHINE_IA64:
+        case IMAGE_FILE_MACHINE_AMD64: return TargetArch::X64;
+        case IMAGE_FILE_MACHINE_ARM64: return TargetArch::ARM64;
+        default:                       return TargetArch::Unknown;
+    }
+}
+
+static const wchar_t* ArchName(TargetArch a)
+{
+    switch (a) {
+        case TargetArch::X86:   return L"x86";
+        case TargetArch::X64:   return L"x64";
+        case TargetArch::ARM64: return L"arm64";
+        default:                return L"unknown";
+    }
+}
+
+static std::string WideToAcp(std::wstring_view w)
+{
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_ACP, 0, w.data(), static_cast<int>(w.size()),
+                                      nullptr, 0, nullptr, nullptr);
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_ACP, 0, w.data(), static_cast<int>(w.size()),
+                        out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+static std::optional<std::filesystem::path>
+FindBywayDll(const std::filesystem::path& targetDir,
+             const std::filesystem::path& exeDir,
+             const wchar_t* archName)
+{
+    const std::wstring dllName = std::wstring(L"version-") + archName + L".dll";
+    for (const std::filesystem::path& dir : { targetDir, exeDir }) {
+        auto candidate = dir / dllName;
+        if (std::filesystem::exists(candidate)) return candidate;
+    }
+    return std::nullopt;
+}
+
+struct PatchedCtx { const char* needle; BOOL found; };
+
+static BOOL CALLBACK PatchedCheckCallback(_In_opt_ PVOID pContext,
+                                          _In_opt_ LPCSTR pszFile,
+                                          _Outptr_result_maybenull_ LPCSTR* ppszOutFile)
+{
+    PatchedCtx* ctx = (PatchedCtx*)pContext;
+    *ppszOutFile = pszFile;
+    if (pszFile && ctx && ctx->needle) {
+        const char* pszBasename = PathFindFileNameA(pszFile);
+        if (_stricmp(pszBasename, ctx->needle) == 0) {
+            ctx->found = TRUE;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL IsAlreadyPatched(const char* targetPath, const char* dllName)
+{
+    HANDLE hFile = CreateFileA(targetPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return FALSE;
+    }
+
+    PDETOUR_BINARY pBinary = DetourBinaryOpen(hFile);
+    CloseHandle(hFile);
+    if (!pBinary) return FALSE;
+
+    PatchedCtx ctx = { dllName, FALSE };
+    DetourBinaryEditImports(pBinary, &ctx, PatchedCheckCallback, NULL, NULL, NULL);
+    DetourBinaryClose(pBinary);
+    return ctx.found;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -318,7 +397,7 @@ void PrintUsage(void)
 
 //////////////////////////////////////////////////////////////////////// main.
 //
-int CDECL main(int argc, char **argv)
+static int cli_main(int argc, char **argv)
 {
     BOOL fNeedHelp = FALSE;
     PCHAR pszFilePart = NULL;
@@ -360,7 +439,7 @@ int CDECL main(int argc, char **argv)
                     }
                     MultiByteToWideChar(CP_ACP, 0, argp, -1, w_szDllPath, MAX_PATH);
 
-                    if (argp[0] != ':' && strchr(argp, '\\') != NULL) 
+                    if (argp[0] != ':' && strchr(argp, '\\') != NULL)
                     {
                         WCHAR fullPath[MAX_PATH];
                         if (GetFullPathNameW(w_szDllPath, MAX_PATH, fullPath, NULL)) {
@@ -369,27 +448,23 @@ int CDECL main(int argc, char **argv)
                     }
 
                     WideCharToMultiByte(CP_ACP, 0, w_szDllPath, -1, s_szDllPath, sizeof(s_szDllPath), NULL, NULL);
-                    
+
                     if (s_szDllPath[0] != '\0')
                     {
-                        int bits = get_file_bits(w_szDllPath);
-                        if (bits == 332)
-                        {
-                            printf("PE32 executable (i386), for MS Windows\n");
+                        switch (DetectTargetArch(w_szDllPath)) {
+                            case TargetArch::X86:
+                                printf("PE32 executable (i386), for MS Windows\n");
+                                return 0;
+                            case TargetArch::X64:
+                                printf("PE32+ executable (x86-64), for MS Windows\n");
+                                return 0;
+                            case TargetArch::ARM64:
+                                printf("PE32+ executable (ARM64), for MS Windows\n");
+                                return 0;
+                            default:
+                                printf("Unknown PE format or not a valid PE file\n");
+                                return 1;
                         }
-                        else if (bits == 34404)
-                        {
-                            printf("PE32+ executable (x86-64), for MS Windows\n");
-                        }
-                        else if (bits == 43620)
-                        {
-                            printf("PE32+ executable (ARM64), for MS Windows\n");
-                        }
-                        else
-                        {
-                            printf("Unknown PE format or not a valid PE file\n");
-                        }
-                        return bits;
                     }
                     break;
 
@@ -437,6 +512,346 @@ int CDECL main(int argc, char **argv)
         }
     }
     return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+//  GUI dispatcher.
+//
+
+static int RunInjectGui(HINSTANCE hInstance, const wchar_t* preloadedTarget);
+
+static void AttachParentConsole(void)
+{
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* f = nullptr;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+        freopen_s(&f, "CONIN$",  "r", stdin);
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+//  GUI dialog state and procedure.
+//
+
+struct GuiState {
+    std::wstring targetPath;
+    std::wstring dllPath;
+    TargetArch arch        = TargetArch::Unknown;
+    bool targetLoaded      = false;
+    bool alreadyPatched    = false;
+    bool dllFound          = false;
+};
+
+static void RenderEmpty(HWND hDlg)
+{
+    SetDlgItemTextW(hDlg, IDC_PROMPT, L"Drop a Windows executable here, or browse:");
+    ShowWindow(GetDlgItem(hDlg, IDC_BROWSE),       SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TARGET_GROUP), SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_FILE),   SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_FILE),    SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_ARCH),   SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_ARCH),    SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_DLL),    SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_DLL),     SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_BROWSE_DLL),   SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_STATUS), SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_STATUS),  SW_HIDE);
+    ShowWindow(GetDlgItem(hDlg, IDC_PRIMARY),      SW_HIDE);
+}
+
+static void RenderLoaded(HWND hDlg, const GuiState* s)
+{
+    SetDlgItemTextW(hDlg, IDC_PROMPT, L"Drop a different file to swap targets, or:");
+    ShowWindow(GetDlgItem(hDlg, IDC_BROWSE),       SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TARGET_GROUP), SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_FILE),   SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_FILE),    SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_ARCH),   SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_ARCH),    SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_DLL),    SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_DLL),     SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_BROWSE_DLL),   SW_SHOW);
+    EnableWindow(GetDlgItem(hDlg, IDC_BROWSE_DLL), TRUE);
+    ShowWindow(GetDlgItem(hDlg, IDC_LABEL_STATUS), SW_SHOW);
+    ShowWindow(GetDlgItem(hDlg, IDC_TEXT_STATUS),  SW_SHOW);
+
+    SetDlgItemTextW(hDlg, IDC_TEXT_FILE, s->targetPath.c_str());
+    SetDlgItemTextW(hDlg, IDC_TEXT_ARCH, ArchName(s->arch));
+    SetDlgItemTextW(hDlg, IDC_TEXT_DLL,
+                    s->dllFound ? s->dllPath.c_str() : L"(not found next to target or setdll.exe)");
+
+    if (!s->dllFound) {
+        std::wstring msg = L"version-";
+        msg += ArchName(s->arch);
+        msg += L".dll not found. Place it next to the target, or click Change...";
+        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS, msg.c_str());
+        EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY), FALSE);
+        SetDlgItemTextW(hDlg, IDC_PRIMARY, L"Inject");
+    } else if (s->alreadyPatched) {
+        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS, L"Already injected. Click Restore to remove.");
+        EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY), TRUE);
+        SetDlgItemTextW(hDlg, IDC_PRIMARY, L"Restore");
+    } else {
+        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS, L"Not yet injected.");
+        EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY), TRUE);
+        SetDlgItemTextW(hDlg, IDC_PRIMARY, L"Inject");
+    }
+    ShowWindow(GetDlgItem(hDlg, IDC_PRIMARY), SW_SHOW);
+}
+
+static void RenderResult(HWND hDlg, BOOL ok, const wchar_t* message)
+{
+    SetDlgItemTextW(hDlg, IDC_TEXT_STATUS,
+                    message ? message : (ok ? L"Done." : L"Failed."));
+    SetDlgItemTextW(hDlg, IDC_PRIMARY, L"OK");
+    EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY),    TRUE);
+    EnableWindow(GetDlgItem(hDlg, IDC_BROWSE),     FALSE);
+    EnableWindow(GetDlgItem(hDlg, IDC_BROWSE_DLL), FALSE);
+}
+
+static void RecheckPatched(GuiState* s)
+{
+    if (!s->targetLoaded || !s->dllFound) {
+        s->alreadyPatched = false;
+        return;
+    }
+    const std::string targetA  = WideToAcp(s->targetPath);
+    const std::string dllNameA =
+        WideToAcp(std::filesystem::path(s->dllPath).filename().wstring());
+    s->alreadyPatched = IsAlreadyPatched(targetA.c_str(), dllNameA.c_str()) != FALSE;
+}
+
+static void LoadTarget(HWND hDlg, GuiState* s, const std::wstring& path)
+{
+    *s = GuiState{};
+    s->targetPath = path;
+    s->targetLoaded = true;
+
+    s->arch = DetectTargetArch(path.c_str());
+    if (s->arch == TargetArch::Unknown) {
+        RenderLoaded(hDlg, s);
+        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS, L"Not a valid Windows executable.");
+        EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY), FALSE);
+        return;
+    }
+
+    const std::filesystem::path targetDir = std::filesystem::path(path).parent_path();
+
+    wchar_t exePathBuf[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePathBuf, MAX_PATH);
+    const std::filesystem::path exeDir = std::filesystem::path(exePathBuf).parent_path();
+
+    if (auto dll = FindBywayDll(targetDir, exeDir, ArchName(s->arch))) {
+        s->dllFound = true;
+        s->dllPath  = dll->wstring();
+    }
+    RecheckPatched(s);
+
+    RenderLoaded(hDlg, s);
+}
+
+static std::pair<bool, std::wstring> DoPatchOrRestore(GuiState* s, bool remove)
+{
+    if (!s->targetLoaded || !s->dllFound) {
+        return { false, L"Internal error: target or DLL not set." };
+    }
+
+    s_fRemove = remove ? TRUE : FALSE;
+    if (!remove) {
+        std::string fullDllA = WideToAcp(s->dllPath);
+        if (!DoesDllExportOrdinal1(fullDllA.data())) {
+            return { false, L"Selected DLL is missing ordinal #1 export." };
+        }
+        const std::string dllBasenameA =
+            WideToAcp(std::filesystem::path(s->dllPath).filename().wstring());
+        StringCchCopyA(s_szDllPath, sizeof(s_szDllPath), dllBasenameA.c_str());
+    } else {
+        s_szDllPath[0] = '\0';
+    }
+
+    std::string targetA = WideToAcp(s->targetPath);
+
+    FILE* nul = nullptr;
+    freopen_s(&nul, "NUL", "w", stdout);
+
+    SetLastError(ERROR_SUCCESS);
+    const BOOL ok = SetFile(targetA.data());
+    const DWORD err = GetLastError();
+
+    if (nul) fclose(nul);
+
+    const std::wstring targetName = std::filesystem::path(s->targetPath).filename().wstring();
+    const std::wstring dllName    = std::filesystem::path(s->dllPath).filename().wstring();
+
+    if (!ok) {
+        if (err == ERROR_SHARING_VIOLATION) {
+            return { false, targetName + L" is in use. Close all instances and try again." };
+        }
+        if (err == ERROR_ACCESS_DENIED) {
+            return { false, L"Access denied. Try running as administrator." };
+        }
+        wchar_t buf[64];
+        StringCchPrintfW(buf, 64, L"Patching failed (Win32 error %lu).", err);
+        return { false, buf };
+    }
+
+    return { true,
+             L"Done. " + targetName +
+             (remove ? L" no longer loads " : L" now loads ") +
+             dllName + L" on launch." };
+}
+
+static INT_PTR CALLBACK InjectDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static GuiState s_state;
+    enum class Phase { Empty, Loaded, Result };
+    static Phase s_phase = Phase::Empty;
+
+    switch (msg) {
+    case WM_INITDIALOG: {
+        DragAcceptFiles(hDlg, TRUE);
+        s_state = GuiState{};
+
+        const wchar_t* preload = reinterpret_cast<const wchar_t*>(lParam);
+        if (preload && preload[0] && std::filesystem::exists(preload)) {
+            s_phase = Phase::Loaded;
+            LoadTarget(hDlg, &s_state, preload);
+        } else {
+            s_phase = Phase::Empty;
+            RenderEmpty(hDlg);
+        }
+        return TRUE;
+    }
+
+    case WM_DROPFILES: {
+        if (s_phase == Phase::Result) return TRUE;
+        HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+        wchar_t path[MAX_PATH];
+        UINT n = DragQueryFileW(hDrop, 0, path, MAX_PATH);
+        DragFinish(hDrop);
+        if (n > 0 && std::filesystem::exists(path)) {
+            s_phase = Phase::Loaded;
+            LoadTarget(hDlg, &s_state, path);
+        }
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDC_BROWSE: {
+            wchar_t buf[MAX_PATH] = L"";
+            OPENFILENAMEW ofn = { sizeof(ofn) };
+            ofn.hwndOwner   = hDlg;
+            ofn.lpstrFilter = L"Executables (*.exe)\0*.exe\0All files (*.*)\0*.*\0";
+            ofn.lpstrFile   = buf;
+            ofn.nMaxFile    = MAX_PATH;
+            ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+            if (GetOpenFileNameW(&ofn)) {
+                s_phase = Phase::Loaded;
+                LoadTarget(hDlg, &s_state, buf);
+            }
+            return TRUE;
+        }
+        case IDC_BROWSE_DLL: {
+            if (!s_state.targetLoaded) return TRUE;
+            wchar_t buf[MAX_PATH] = L"";
+            const std::wstring initialDir =
+                std::filesystem::path(s_state.targetPath).parent_path().wstring();
+            OPENFILENAMEW ofn = { sizeof(ofn) };
+            ofn.hwndOwner       = hDlg;
+            ofn.lpstrFilter     = L"DLL files (*.dll)\0*.dll\0All files (*.*)\0*.*\0";
+            ofn.lpstrFile       = buf;
+            ofn.nMaxFile        = MAX_PATH;
+            ofn.lpstrInitialDir = initialDir.c_str();
+            ofn.Flags           = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+            if (GetOpenFileNameW(&ofn)) {
+                s_state.dllPath  = buf;
+                s_state.dllFound = true;
+                RecheckPatched(&s_state);
+                RenderLoaded(hDlg, &s_state);
+            }
+            return TRUE;
+        }
+        case IDC_PRIMARY: {
+            if (s_phase == Phase::Result) {
+                EndDialog(hDlg, 0);
+                return TRUE;
+            }
+            auto [ok, msg] = DoPatchOrRestore(&s_state, s_state.alreadyPatched);
+            s_phase = Phase::Result;
+            RenderResult(hDlg, ok, msg.c_str());
+            return TRUE;
+        }
+        case IDCANCEL:
+            EndDialog(hDlg, 1);
+            return TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        EndDialog(hDlg, 1);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static int RunInjectGui(HINSTANCE hInstance, const wchar_t* preloadedTarget)
+{
+    INT_PTR rc = DialogBoxParamW(hInstance,
+                                 MAKEINTRESOURCEW(IDD_INJECT_DIALOG),
+                                 NULL,
+                                 InjectDialogProc,
+                                 (LPARAM)preloadedTarget);
+    return (rc < 0) ? 1 : 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+extern "C" int APIENTRY wWinMain(HINSTANCE hInstance,
+                                 HINSTANCE /*hPrev*/,
+                                 LPWSTR /*lpCmdLine*/,
+                                 int /*nShow*/)
+{
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argvW) return 1;
+
+    bool hasFlag = false;
+    LPCWSTR firstPositional = nullptr;
+    for (int i = 1; i < argc; i++) {
+        if (argvW[i][0] == L'/' || argvW[i][0] == L'-') {
+            hasFlag = true;
+        } else if (!firstPositional) {
+            firstPositional = argvW[i];
+        }
+    }
+
+    if (hasFlag) {
+        AttachParentConsole();
+        std::vector<std::string> argStrings;
+        argStrings.reserve(argc);
+        std::vector<char*> argvA;
+        argvA.reserve(argc + 1);
+        for (int i = 0; i < argc; i++) {
+            argStrings.push_back(WideToAcp(argvW[i]));
+            argvA.push_back(argStrings.back().data());
+        }
+        argvA.push_back(nullptr);
+        const int rc = cli_main(argc, argvA.data());
+        LocalFree(argvW);
+        return rc;
+    }
+
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };
+    InitCommonControlsEx(&icc);
+
+    int rc = RunInjectGui(hInstance, firstPositional);
+    LocalFree(argvW);
+    return rc;
 }
 
 // End of File
