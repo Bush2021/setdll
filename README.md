@@ -30,7 +30,9 @@ setdll /r target.exe
 setdll /t:target.exe
 ```
 
-`setdll.exe` is a Windows-subsystem binary; CLI output attaches to the parent console (`cmd.exe`, PowerShell, etc.). Existing scripts that invoke the CLI continue to work unchanged.
+`setdll.exe` is a Windows-subsystem binary; CLI output attaches to the parent console (`cmd.exe`, PowerShell, etc.).
+
+> **v3 breaking change**: `/t:` now exits `0` on success and `1` on failure. Previous versions returned the PE machine word as the exit code (`332` / `34404` / `43620`); scripts that branched on `%errorlevel%` to dispatch on architecture need to parse stdout instead. Other CLI options are unchanged.
 
 ### License
 

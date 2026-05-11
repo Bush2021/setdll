@@ -584,8 +584,10 @@ static void RenderLoaded(HWND hDlg, const GuiState* s)
                     s->dllFound ? s->dllPath.c_str() : L"(not found next to target or setdll.exe)");
 
     if (!s->dllFound) {
-        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS,
-                        L"Cannot proceed: place version-<arch>.dll next to the target.");
+        std::wstring msg = L"version-";
+        msg += ArchName(s->arch);
+        msg += L".dll not found. Place it next to the target, or click Change...";
+        SetDlgItemTextW(hDlg, IDC_TEXT_STATUS, msg.c_str());
         EnableWindow(GetDlgItem(hDlg, IDC_PRIMARY), FALSE);
         SetDlgItemTextW(hDlg, IDC_PRIMARY, L"Inject");
     } else if (s->alreadyPatched) {
