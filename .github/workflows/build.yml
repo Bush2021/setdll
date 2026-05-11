@@ -1,16 +1,29 @@
 name: Build
-on: 
+
+on:
   push:
     paths-ignore:
-      - '*.md'
-      - '.gitignore'
+      - ".clang-format"
+      - ".gitignore"
+      - "*.md"
+      - "LICENSE"
       - "src/version.h"
+      - ".github/ISSUE_TEMPLATE/**"
       - ".github/workflows/delete_old_workflow_runs.yml"
+      - ".github/workflows/genReleaseNote.sh"
   workflow_dispatch:
     inputs:
       version:
         description: 'Release version (SemVer)'
-        required: true
+        required: false
+      build_mode:
+        description: 'Build mode'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
 
 jobs:
   build:
@@ -23,61 +36,96 @@ jobs:
             arch: x64
           - name: build_arm64
             arch: arm64
+
     name: ${{ matrix.name }}
-    runs-on: windows-latest
-    
+    runs-on: windows-2025
+
     steps:
-    - name: Checkout Repo
-      uses: actions/checkout@v4
-      with:
-        submodules: 'true'
+      - name: Checkout Repo
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
 
-    - name: Update version.h
-      shell: bash
-      run: |
-        if [ "${{ github.event_name }}" == "push" ]; then
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-          VERSION="alpha-${COMMIT_HASH}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          sed -i '/#define RELEASE_VER_STR/,/TOSTRING(RELEASE_VER_FIX)/c\#define RELEASE_VER_STR "'$VERSION'"' src/version.h
-        elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          VERSION="${{ github.event.inputs.version }}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-          sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '$MAJOR'/' src/version.h
-          sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '$MINOR'/' src/version.h 
-          sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '$PATCH'/' src/version.h
-        fi
+      - name: Update version.h
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            COMMIT_HASH=$(git rev-parse --short HEAD)
+            VERSION="alpha-${COMMIT_HASH}"
+            echo "VERSION=$VERSION" >> $GITHUB_ENV
+            sed -i '/#define RELEASE_VER_STR/,/RELEASE_VER_PRE_SUFFIX/c\#define RELEASE_VER_STR "'"$VERSION"'"' src/version.h
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            if [ -n "$INPUT_VERSION" ]; then
+              VERSION="$INPUT_VERSION"
+              if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+                echo "::error::Invalid version '$VERSION'. Expected SemVer like 1.2.3 or 1.2.3-alpha.1" >&2
+                exit 1
+              fi
+              echo "VERSION=$VERSION" >> $GITHUB_ENV
+              CORE="${VERSION%%-*}"
+              PRE="${VERSION#*-}"
+              if [ "$PRE" = "$VERSION" ]; then PRE_SUFFIX=""; else PRE_SUFFIX="-$PRE"; fi
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
+              sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '"$MAJOR"'/' src/version.h
+              sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '"$MINOR"'/' src/version.h
+              sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '"$PATCH"'/' src/version.h
+              sed -i 's|#define RELEASE_VER_PRE_SUFFIX .*|#define RELEASE_VER_PRE_SUFFIX "'"$PRE_SUFFIX"'"|' src/version.h
+            else
+              COMMIT_HASH=$(git rev-parse --short HEAD)
+              VERSION="manual-${COMMIT_HASH}"
+              echo "VERSION=$VERSION" >> $GITHUB_ENV
+            fi
+          fi
 
-    - name: Setup VC-LTL
-      run: nuget install VC-LTL
-      
-    - name: Setup YY-Thunks
-      run: nuget install YY-Thunks
+      - name: Set Build Mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.build_mode }}" ]; then
+            BUILD_MODE="${{ github.event.inputs.build_mode }}"
+          else
+            BUILD_MODE="release"
+          fi
+          echo "BUILD_MODE=$BUILD_MODE" >> $GITHUB_ENV
+          echo "Using BUILD_MODE=$BUILD_MODE"
 
-    - name: Setup Xmake
-      uses: xmake-io/github-action-setup-xmake@v1
-      
-    - name: Configure Xmake
-      run: xmake f -a ${{ matrix.arch }}
-      
-    - name: Build
-      run: xmake
-        
-    - name: Upload Separate Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: setdll-${{ matrix.arch }}
-        path: build/release/*
+      - name: Set CLANG_BIN
+        shell: bash
+        run: |
+          CLANG_BIN=$(dirname "$(where clang-cl | head -n 1)")
+          echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
+
+      - name: Setup Xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: '3.0.5'
+
+      - name: Configure Xmake
+        run: xmake f -m ${{ env.BUILD_MODE }} -a ${{ matrix.arch }} --toolchain=clang-cl --bin="${{ env.CLANG_BIN }}" --yes
+
+      - name: Build SetDll
+        shell: bash
+        run: |
+          if [ "${{ env.BUILD_MODE }}" == "debug" ]; then
+            xmake -vD
+          else
+            xmake
+          fi
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: setdll-${{ matrix.arch }}${{ env.BUILD_MODE == 'debug' && '-debug' || '' }}-${{ env.VERSION }}
+          path: build/${{ env.BUILD_MODE }}/*
 
   create_pr:
     needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-slim
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Git Configurations
         run: |
@@ -88,20 +136,27 @@ jobs:
       - name: Update version.h
         run: |
           VERSION="${{ github.event.inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid version '$VERSION'. Expected SemVer like 1.2.3 or 1.2.3-alpha.1" >&2
+            exit 1
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          CORE="${VERSION%%-*}"
+          PRE="${VERSION#*-}"
+          if [ "$PRE" = "$VERSION" ]; then PRE_SUFFIX=""; else PRE_SUFFIX="-$PRE"; fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
           sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '"$MAJOR"'/' src/version.h
           sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '"$MINOR"'/' src/version.h
           sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '"$PATCH"'/' src/version.h
+          sed -i 's|#define RELEASE_VER_PRE_SUFFIX .*|#define RELEASE_VER_PRE_SUFFIX "'"$PRE_SUFFIX"'"|' src/version.h
           git add src/version.h
-          git commit -m "build(release): bump version to $VERSION"
+          git commit -m "build(release): bump version to $VERSION" -m "Build-Run-Id: ${{ github.run_id }}"
           git push origin release --force
 
       - name: Create Pull Request
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN }}
         run: |
-          git push origin release
           gh pr create --base main --head release --title "build(release): bump version to ${{ github.event.inputs.version }}" --body "Bump version to ${{ github.event.inputs.version }}"
 
       - name: Output Run ID
